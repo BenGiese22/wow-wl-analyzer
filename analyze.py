@@ -88,7 +88,57 @@ def cmd_setup(args, env_path: str = ".env") -> None:
 
 
 def cmd_overview(args) -> None:
-    pass  # implemented in Task 12
+    from src.auth import get_access_token
+    from src.client import query as wcl_query
+    from src.constants import DUNGEONS
+    from src.queries import GET_REPORT_FIGHTS
+    from src.rankings import fetch_top_rankings
+    from src import report as rpt
+
+    client_id = _require_env("WCL_CLIENT_ID")
+    client_secret = _require_env("WCL_CLIENT_SECRET")
+    class_name = _require_env("CHARACTER_CLASS")
+    spec_name = _require_env("CHARACTER_SPEC")
+    region = os.getenv("CHARACTER_REGION", "US")
+    top_n = args.top or int(os.getenv("TOP_N_PARSES", "10"))
+    bracket = args.bracket or int(os.getenv("DEFAULT_BRACKET", "18"))
+
+    token = get_access_token(client_id, client_secret)
+    data = wcl_query(token, GET_REPORT_FIGHTS, {"code": args.report})
+    fights = data["reportData"]["report"]["fights"]
+
+    results = []
+    for dungeon_name, encounter_id in DUNGEONS.items():
+        matching = [
+            f for f in fights
+            if f["encounterID"] == encounter_id
+            and f.get("keystoneLevel") == bracket
+            and f.get("kill")
+        ]
+        if not matching:
+            continue
+        best = min(matching, key=lambda f: f["endTime"] - f["startTime"])
+        duration_s = round((best["endTime"] - best["startTime"]) / 1000)
+
+        rankings = fetch_top_rankings(token, encounter_id, class_name, spec_name, region, bracket, top_n)
+        if not rankings:
+            continue
+        top_n_dps = sum(r["amount"] for r in rankings) / len(rankings)
+
+        results.append({
+            "dungeon": dungeon_name,
+            "bracket": bracket,
+            "fight_id": best["id"],
+            "fight_duration_s": duration_s,
+            "top_n_dps": top_n_dps,
+            "top_n": top_n,
+            "rankings": rankings,
+        })
+
+    rpt.print_overview_results(results)
+    body = rpt.build_overview_html(results, os.getenv("CHARACTER_NAME", ""), bracket, top_n)
+    path = rpt.save_html_report(body)
+    rpt.console.print(f"\n[dim]Full report → {path}[/dim]")
 
 
 def cmd_dungeon(args) -> None:

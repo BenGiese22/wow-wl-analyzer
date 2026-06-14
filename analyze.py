@@ -142,7 +142,87 @@ def cmd_overview(args) -> None:
 
 
 def cmd_dungeon(args) -> None:
-    pass  # implemented in Task 13
+    from src.auth import get_access_token
+    from src.client import query as wcl_query
+    from src.constants import DUNGEONS
+    from src.queries import GET_REPORT_FIGHTS
+    from src.rankings import fetch_top_rankings
+    from src.events import fetch_cast_counts, find_actor_id, extract_ability_names
+    from src.comparison import compute_comparison
+    from src import report as rpt
+
+    client_id = _require_env("WCL_CLIENT_ID")
+    client_secret = _require_env("WCL_CLIENT_SECRET")
+    char_name = _require_env("CHARACTER_NAME")
+    class_name = _require_env("CHARACTER_CLASS")
+    spec_name = _require_env("CHARACTER_SPEC")
+    region = os.getenv("CHARACTER_REGION", "US")
+    top_n = args.top or int(os.getenv("TOP_N_PARSES", "10"))
+    bracket = args.bracket or int(os.getenv("DEFAULT_BRACKET", "18"))
+
+    encounter_id = DUNGEONS.get(args.dungeon)
+    if encounter_id is None:
+        valid = ", ".join(f'"{d}"' for d in DUNGEONS)
+        rpt.console.print(f"[red]Unknown dungeon '{args.dungeon}'. Valid: {valid}[/red]")
+        sys.exit(1)
+
+    token = get_access_token(client_id, client_secret)
+    data = wcl_query(token, GET_REPORT_FIGHTS, {"code": args.report})
+    report_data = data["reportData"]["report"]
+    fights = report_data["fights"]
+    master = report_data["masterData"]
+    ability_names = extract_ability_names(master)
+
+    matching = [
+        f for f in fights
+        if f["encounterID"] == encounter_id
+        and f.get("keystoneLevel") == bracket
+        and f.get("kill")
+    ]
+    if not matching:
+        rpt.console.print(
+            f"[red]No +{bracket} kill found for '{args.dungeon}' in report '{args.report}'.[/red]"
+        )
+        sys.exit(1)
+
+    best = min(matching, key=lambda f: f["endTime"] - f["startTime"])
+    player_actor_id = next(
+        (a["id"] for a in master["actors"] if a["name"].lower() == char_name.lower()), None
+    )
+    if player_actor_id is None:
+        rpt.console.print(f"[red]Could not find actor for '{char_name}' in report.[/red]")
+        sys.exit(1)
+
+    rpt.console.print(f"Fetching your casts for {args.dungeon} +{bracket}...")
+    player_casts = fetch_cast_counts(
+        token, args.report, best["id"], player_actor_id,
+        float(best["startTime"]), float(best["endTime"])
+    )
+
+    rpt.console.print(f"Fetching top {top_n} {class_name} {spec_name} rankings...")
+    rankings = fetch_top_rankings(token, encounter_id, class_name, spec_name, region, bracket, top_n)
+    if not rankings:
+        rpt.console.print(f"[yellow]No rankings found for {class_name}/{spec_name} at +{bracket}.[/yellow]")
+        sys.exit(0)
+
+    top_n_dps = sum(r["amount"] for r in rankings) / len(rankings)
+    competitor_casts: list[dict[int, int]] = []
+    for rank in rankings:
+        comp_actor_id = find_actor_id(token, rank["report_code"], rank["name"])
+        casts = fetch_cast_counts(
+            token, rank["report_code"], rank["fight_id"], comp_actor_id,
+            float(report_data["startTime"]), float(report_data["endTime"])
+        )
+        competitor_casts.append(casts)
+
+    deltas = compute_comparison(player_casts, competitor_casts, ability_names)
+    duration_s = round((best["endTime"] - best["startTime"]) / 1000)
+    player_dps = sum(player_casts.values()) / duration_s if duration_s else 0
+
+    rpt.print_dungeon_table(deltas, args.dungeon, bracket, player_dps, top_n_dps, top_n)
+    body = rpt.build_dungeon_html(deltas, args.dungeon, bracket, player_dps, top_n_dps, top_n, char_name)
+    path = rpt.save_html_report(body)
+    rpt.console.print(f"\n[dim]Full report → {path}[/dim]")
 
 
 def cmd_compare(args) -> None:

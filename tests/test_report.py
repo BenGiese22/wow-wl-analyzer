@@ -58,3 +58,47 @@ def test_print_compare_table_shows_both_players():
     assert "Bêngi" in all_output
     assert "Playerone" in all_output
     assert "Arcane Blast" in all_output
+
+
+import tempfile
+from src.report import save_html_report, build_dungeon_html, build_overview_html, build_compare_html
+
+
+def test_save_html_report_creates_file():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = save_html_report("<p>test</p>", output_dir=tmpdir)
+        assert path.endswith(".html")
+        assert os.path.exists(path)
+
+
+def test_build_dungeon_html_contains_ability_names():
+    html = build_dungeon_html(_DELTAS, "Maisara Caverns", 18, 245312.0, 271044.0, 10, "Bêngi")
+    assert "Arcane Blast" in html
+    assert "Arcane Pulse" in html
+    assert "Maisara Caverns" in html
+
+
+def test_build_overview_html_contains_dungeons():
+    results = [{"dungeon": "Maisara Caverns", "bracket": 18, "top_n_dps": 271044.0, "top_n": 10, "fight_duration_s": 134}]
+    html = build_overview_html(results, "Bêngi", 18, 10)
+    assert "Maisara Caverns" in html
+    assert "Bêngi" in html
+
+
+def test_build_compare_html_contains_both_names():
+    html = build_compare_html(
+        {30451: 142}, {30451: 126},
+        {30451: "Arcane Blast"},
+        "Bêngi", "Playerone",
+        "Maisara Caverns", 18,
+    )
+    assert "Bêngi" in html
+    assert "Playerone" in html
+    assert "Arcane Blast" in html
+
+
+def test_html_report_is_utf8():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = save_html_report("<p>Bêngi</p>", output_dir=tmpdir)
+        content = open(path, encoding="utf-8").read()
+        assert "Bêngi" in content

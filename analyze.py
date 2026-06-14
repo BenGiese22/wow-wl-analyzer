@@ -226,7 +226,53 @@ def cmd_dungeon(args) -> None:
 
 
 def cmd_compare(args) -> None:
-    pass  # implemented in Task 14
+    from src.auth import get_access_token
+    from src.events import fetch_cast_counts, extract_ability_names
+    from src.queries import GET_REPORT_MASTER_DATA
+    import src.events as _events
+    from src import report as rpt
+
+    client_id = _require_env("WCL_CLIENT_ID")
+    client_secret = _require_env("WCL_CLIENT_SECRET")
+    char_name = _require_env("CHARACTER_NAME")
+
+    token = get_access_token(client_id, client_secret)
+
+    rpt.console.print("Fetching your report masterData...")
+    my_master_data = _events.query(token, GET_REPORT_MASTER_DATA, {"code": args.report})
+    my_master = my_master_data["reportData"]["report"]["masterData"]
+    ability_names = extract_ability_names(my_master)
+    my_actor_id = next(
+        (a["id"] for a in my_master["actors"] if a["name"].lower() == char_name.lower()),
+        None
+    )
+    if my_actor_id is None:
+        rpt.console.print(f"[red]Could not find '{char_name}' in report '{args.report}'.[/red]")
+        sys.exit(1)
+
+    rpt.console.print(f"Fetching your casts (fight {args.fight})...")
+    my_casts = fetch_cast_counts(token, args.report, args.fight, my_actor_id, 0.0, 99999999.0)
+
+    rpt.console.print("Fetching competitor masterData...")
+    their_master_data = _events.query(token, GET_REPORT_MASTER_DATA, {"code": args.vs})
+    their_master = their_master_data["reportData"]["report"]["masterData"]
+    their_actor = their_master["actors"][0] if their_master["actors"] else None
+    if their_actor is None:
+        rpt.console.print(f"[red]No players found in report '{args.vs}'.[/red]")
+        sys.exit(1)
+    their_name = their_actor["name"]
+    their_actor_id = their_actor["id"]
+
+    rpt.console.print(f"Fetching {their_name}'s casts (fight {args.vs_fight})...")
+    their_casts = fetch_cast_counts(token, args.vs, args.vs_fight, their_actor_id, 0.0, 99999999.0)
+
+    rpt.print_compare_table(my_casts, their_casts, ability_names, char_name, their_name)
+    body = rpt.build_compare_html(
+        my_casts, their_casts, ability_names,
+        char_name, their_name, "Mythic+", 0
+    )
+    path = rpt.save_html_report(body)
+    rpt.console.print(f"\n[dim]Full report → {path}[/dim]")
 
 
 def main() -> None:
